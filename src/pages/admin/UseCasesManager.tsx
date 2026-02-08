@@ -7,12 +7,38 @@ interface UseCase {
   title: string
   category: string
   sub_category: string
-  scope: string | null
-  timeline: string | null
-  price: string | null
+  engagement_category: string | null
+  whats_included: string | null
+  key_deliverables: string | null
+  why_it_matters: string | null
+  how_its_delivered: string | null
+  use_case_number: number | null
 }
 
-const emptyForm = { title: '', category: '', sub_category: '', scope: '', timeline: '', price: '' }
+const emptyForm = {
+  title: '',
+  category: '',
+  sub_category: '',
+  engagement_category: '',
+  use_case_number: '',
+  why_it_matters: '',
+  whats_included: '',
+  key_deliverables: '',
+  how_its_delivered: '',
+}
+
+const engagementOptions = [
+  { value: '', label: 'None' },
+  { value: 'A', label: 'A — Fixed Scope' },
+  { value: 'B', label: 'B — Discovery + Fixed' },
+  { value: 'C', label: 'C — T-Shirt Sizing' },
+]
+
+const engagementBadge: Record<string, { bg: string; text: string }> = {
+  A: { bg: 'bg-green-100', text: 'text-green-800' },
+  B: { bg: 'bg-blue-100', text: 'text-blue-800' },
+  C: { bg: 'bg-orange-100', text: 'text-orange-800' },
+}
 
 export default function UseCasesManager() {
   const [items, setItems] = useState<UseCase[]>([])
@@ -41,7 +67,8 @@ export default function UseCasesManager() {
       setFiltered(items.filter(uc =>
         uc.title.toLowerCase().includes(q) ||
         uc.category.toLowerCase().includes(q) ||
-        uc.sub_category.toLowerCase().includes(q)
+        uc.sub_category.toLowerCase().includes(q) ||
+        (uc.engagement_category || '').toLowerCase().includes(q)
       ))
     }
   }, [search, items])
@@ -58,9 +85,12 @@ export default function UseCasesManager() {
       title: uc.title,
       category: uc.category,
       sub_category: uc.sub_category,
-      scope: uc.scope ?? '',
-      timeline: uc.timeline ?? '',
-      price: uc.price ?? '',
+      engagement_category: uc.engagement_category ?? '',
+      use_case_number: uc.use_case_number?.toString() ?? '',
+      why_it_matters: uc.why_it_matters ?? '',
+      whats_included: uc.whats_included ?? '',
+      key_deliverables: uc.key_deliverables ?? '',
+      how_its_delivered: uc.how_its_delivered ?? '',
     })
     setModalOpen(true)
   }
@@ -71,9 +101,12 @@ export default function UseCasesManager() {
       title: form.title,
       category: form.category,
       sub_category: form.sub_category,
-      scope: form.scope || null,
-      timeline: form.timeline || null,
-      price: form.price || null,
+      engagement_category: form.engagement_category || null,
+      use_case_number: form.use_case_number ? parseInt(form.use_case_number) : null,
+      why_it_matters: form.why_it_matters || null,
+      whats_included: form.whats_included || null,
+      key_deliverables: form.key_deliverables || null,
+      how_its_delivered: form.how_its_delivered || null,
     }
     if (editing) {
       await supabase.from('use_cases').update(payload).eq('id', editing.id)
@@ -105,7 +138,7 @@ export default function UseCasesManager() {
       <div className="mb-4">
         <input
           type="text"
-          placeholder="Search by title, category, or sub-category..."
+          placeholder="Search by title, category, sub-category, or engagement..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="w-full max-w-md px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
@@ -116,27 +149,34 @@ export default function UseCasesManager() {
         <table className="w-full text-sm">
           <thead className="bg-gray-50 border-b">
             <tr>
+              <th className="text-left px-4 py-3 font-medium text-gray-600 w-10">#</th>
               <th className="text-left px-4 py-3 font-medium text-gray-600">Title</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600 w-28">Category</th>
+              <th className="text-left px-4 py-3 font-medium text-gray-600 w-24">Category</th>
               <th className="text-left px-4 py-3 font-medium text-gray-600 w-36">Sub-Category</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600 w-28">Timeline</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600 w-32">Price</th>
+              <th className="text-left px-4 py-3 font-medium text-gray-600 w-36">Engagement</th>
               <th className="text-right px-4 py-3 font-medium text-gray-600 w-24">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y">
             {filtered.map((uc) => (
               <tr key={uc.id} className="hover:bg-gray-50">
+                <td className="px-4 py-3 text-gray-500 text-xs">{uc.use_case_number ?? '—'}</td>
                 <td className="px-4 py-3">
                   <span className="font-medium text-gray-900">{uc.title}</span>
-                  {uc.scope && <p className="text-xs text-gray-400 mt-0.5 line-clamp-1">{uc.scope}</p>}
                 </td>
                 <td className="px-4 py-3">
                   <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">{uc.category}</span>
                 </td>
                 <td className="px-4 py-3 text-gray-600 text-xs">{uc.sub_category}</td>
-                <td className="px-4 py-3 text-gray-600 text-xs">{uc.timeline ?? '—'}</td>
-                <td className="px-4 py-3 text-gray-600 text-xs">{uc.price ?? '—'}</td>
+                <td className="px-4 py-3">
+                  {uc.engagement_category ? (
+                    <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${engagementBadge[uc.engagement_category]?.bg ?? 'bg-gray-100'} ${engagementBadge[uc.engagement_category]?.text ?? 'text-gray-700'}`}>
+                      Cat {uc.engagement_category}
+                    </span>
+                  ) : (
+                    <span className="text-gray-400 text-xs">—</span>
+                  )}
+                </td>
                 <td className="px-4 py-3 text-right space-x-2">
                   <button onClick={() => openEdit(uc)} className="text-blue-600 hover:underline text-xs">Edit</button>
                   <button onClick={() => handleDelete(uc.id)} className="text-red-600 hover:underline text-xs">Delete</button>
@@ -151,13 +191,13 @@ export default function UseCasesManager() {
       </div>
 
       <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editing ? 'Edit Use Case' : 'New Use Case'}>
-        <div className="space-y-4">
+        <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Title</label>
             <input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-3 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
               <input value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}
@@ -170,25 +210,41 @@ export default function UseCasesManager() {
                 placeholder="e.g. Data & Analytics"
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Use Case #</label>
+              <input value={form.use_case_number} onChange={(e) => setForm({ ...form, use_case_number: e.target.value })}
+                type="number" placeholder="e.g. 1"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Scope</label>
-            <textarea value={form.scope} onChange={(e) => setForm({ ...form, scope: e.target.value })} rows={2}
+            <label className="block text-sm font-medium text-gray-700 mb-1">Engagement Category</label>
+            <select value={form.engagement_category} onChange={(e) => setForm({ ...form, engagement_category: e.target.value })}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+              {engagementOptions.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Why It Matters</label>
+            <textarea value={form.why_it_matters} onChange={(e) => setForm({ ...form, why_it_matters: e.target.value })} rows={3}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Timeline</label>
-              <input value={form.timeline} onChange={(e) => setForm({ ...form, timeline: e.target.value })}
-                placeholder="e.g. 12-16 weeks"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Price</label>
-              <input value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })}
-                placeholder="e.g. $150K-$250K"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
-            </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">What's Included</label>
+            <textarea value={form.whats_included} onChange={(e) => setForm({ ...form, whats_included: e.target.value })} rows={3}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Key Deliverables</label>
+            <textarea value={form.key_deliverables} onChange={(e) => setForm({ ...form, key_deliverables: e.target.value })} rows={3}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">How It's Delivered</label>
+            <textarea value={form.how_its_delivered} onChange={(e) => setForm({ ...form, how_its_delivered: e.target.value })} rows={3}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
           <div className="flex justify-end gap-2 pt-2">
             <button onClick={() => setModalOpen(false)} className="px-4 py-2 border border-gray-300 rounded-lg text-sm hover:bg-gray-50">Cancel</button>

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 import ProgressBar from '../components/ProgressBar'
@@ -12,6 +12,8 @@ interface Question {
   question_type: 'MultipleChoice' | 'YesNo' | 'Checkbox'
   options: string[] | null
   order: number
+  condition_question_id: string | null
+  condition_answer: string | null
 }
 
 interface Section {
@@ -25,7 +27,6 @@ interface Section {
 interface FlatQuestion {
   question: Question
   sectionTitle: string
-  globalIndex: number
 }
 
 export default function Questionnaire() {
@@ -42,7 +43,6 @@ export default function Questionnaire() {
   useEffect(() => {
     async function fetchQuestionnaire() {
       try {
-        // Get the submission to find the questionnaire_id
         const { data: submission, error: subErr } = await supabase
           .from('submissions')
           .select('questionnaire_id')
@@ -53,10 +53,9 @@ export default function Questionnaire() {
           throw new Error('Submission not found')
         }
 
-        // Fetch the full questionnaire structure
         const { data: sections, error: secErr } = await supabase
           .from('sections')
-          .select('id, title, description, order, questions(id, question_text, question_type, options, order)')
+          .select('id, title, description, order, questions(id, question_text, question_type, options, order, condition_question_id, condition_answer)')
           .eq('questionnaire_id', submission.questionnaire_id)
           .order('order', { ascending: true })
 
@@ -64,9 +63,7 @@ export default function Questionnaire() {
           throw new Error('Failed to load questionnaire')
         }
 
-        // Sort questions within each section and flatten
         const flat: FlatQuestion[] = []
-        let globalIdx = 0
         const sortedSections = (sections as Section[]).sort((a, b) => a.order - b.order)
 
         for (const section of sortedSections) {
@@ -75,15 +72,13 @@ export default function Questionnaire() {
             flat.push({
               question: q,
               sectionTitle: section.title,
-              globalIndex: globalIdx,
             })
-            globalIdx++
           }
         }
 
         setFlatQuestions(flat)
 
-        // Load any existing responses for this submission
+        // Load existing responses
         const { data: existingResponses } = await supabase
           .from('responses')
           .select('question_id, answer')
@@ -106,7 +101,19 @@ export default function Questionnaire() {
     fetchQuestionnaire()
   }, [submissionId])
 
-  const currentQ = flatQuestions[currentIndex]
+  // Filter questions based on conditional logic
+  const visibleQuestions = useMemo(() => {
+    return flatQuestions.filter(fq => {
+      const q = fq.question
+      if (!q.condition_question_id || !q.condition_answer) return true
+      const condAnswer = answers[q.condition_question_id]
+      if (condAnswer === undefined || condAnswer === null) return false
+      if (Array.isArray(condAnswer)) return condAnswer.includes(q.condition_answer)
+      return condAnswer === q.condition_answer
+    })
+  }, [flatQuestions, answers])
+
+  const currentQ = visibleQuestions[currentIndex]
   const currentAnswer = currentQ ? answers[currentQ.question.id] ?? null : null
 
   const handleAnswerChange = useCallback((value: string | string[]) => {
@@ -115,7 +122,6 @@ export default function Questionnaire() {
   }, [currentQ])
 
   const saveResponse = async (questionId: string, answer: string | string[]) => {
-    // Upsert: delete existing then insert (Supabase doesn't have upsert on non-unique combos easily)
     await supabase
       .from('responses')
       .delete()
@@ -140,10 +146,9 @@ export default function Questionnaire() {
     try {
       await saveResponse(currentQ.question.id, currentAnswer)
 
-      if (currentIndex < flatQuestions.length - 1) {
+      if (currentIndex < visibleQuestions.length - 1) {
         setCurrentIndex((prev) => prev + 1)
       } else {
-        // Last question — navigate to results
         navigate(`/thank-you/${submissionId}`)
       }
     } catch {
@@ -158,6 +163,13 @@ export default function Questionnaire() {
       setCurrentIndex((prev) => prev - 1)
     }
   }
+
+  // When answers change, ensure currentIndex is still valid
+  useEffect(() => {
+    if (currentIndex >= visibleQuestions.length && visibleQuestions.length > 0) {
+      setCurrentIndex(visibleQuestions.length - 1)
+    }
+  }, [visibleQuestions.length, currentIndex])
 
   if (loading) {
     return (
@@ -198,7 +210,7 @@ export default function Questionnaire() {
     currentAnswer !== null &&
     (Array.isArray(currentAnswer) ? currentAnswer.length > 0 : currentAnswer !== '')
 
-  const isLastQuestion = currentIndex === flatQuestions.length - 1
+  const isLastQuestion = currentIndex === visibleQuestions.length - 1
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
@@ -206,7 +218,7 @@ export default function Questionnaire() {
         <div className="bg-white rounded-2xl shadow-lg p-8">
           <ProgressBar
             current={currentIndex + 1}
-            total={flatQuestions.length}
+            total={visibleQuestions.length}
             sectionTitle={currentQ.sectionTitle}
           />
 
