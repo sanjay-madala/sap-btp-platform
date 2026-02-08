@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 
@@ -13,6 +13,7 @@ interface UseCase {
   why_it_matters: string | null
   how_its_delivered: string | null
   use_case_number: number | null
+  score: number
 }
 
 interface CapturedResponse {
@@ -21,18 +22,43 @@ interface CapturedResponse {
   answer: string | string[]
 }
 
-const categoryColors: Record<string, { bg: string; text: string; label: string }> = {
-  A: { bg: 'bg-green-100', text: 'text-green-800', label: 'Fixed Scope' },
-  B: { bg: 'bg-blue-100', text: 'text-blue-800', label: 'Discovery + Fixed' },
-  C: { bg: 'bg-orange-100', text: 'text-orange-800', label: 'T-Shirt Sizing' },
+interface Phase {
+  key: string
+  label: string
+  description: string
+  color: { bg: string; text: string; border: string; headerBg: string }
 }
 
-function EngagementBadge({ category }: { category: string | null }) {
-  if (!category) return null
-  const style = categoryColors[category] || categoryColors.B
+const phases: Phase[] = [
+  {
+    key: 'A',
+    label: 'Phase 1: Quick Wins',
+    description: 'Fixed-scope engagements with well-defined deliverables — ready to start immediately',
+    color: { bg: 'bg-green-50', text: 'text-green-800', border: 'border-green-200', headerBg: 'bg-green-600' },
+  },
+  {
+    key: 'B',
+    label: 'Phase 2: Discovery & Build',
+    description: 'Require a discovery phase to scope, followed by focused implementation',
+    color: { bg: 'bg-blue-50', text: 'text-blue-800', border: 'border-blue-200', headerBg: 'bg-blue-600' },
+  },
+  {
+    key: 'C',
+    label: 'Phase 3: Strategic Initiatives',
+    description: 'Complex, high-impact programs requiring detailed assessment and phased delivery',
+    color: { bg: 'bg-orange-50', text: 'text-orange-800', border: 'border-orange-200', headerBg: 'bg-orange-600' },
+  },
+]
+
+function RelevanceBadge({ score, maxScore }: { score: number; maxScore: number }) {
+  const pct = Math.round((score / maxScore) * 100)
+  let color = 'bg-gray-100 text-gray-600'
+  if (pct >= 70) color = 'bg-green-100 text-green-700'
+  else if (pct >= 40) color = 'bg-blue-100 text-blue-700'
+  else if (pct >= 20) color = 'bg-yellow-100 text-yellow-700'
   return (
-    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${style.bg} ${style.text}`}>
-      Category {category} — {style.label}
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${color}`}>
+      {pct}% match
     </span>
   )
 }
@@ -44,19 +70,44 @@ export default function ThankYou() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [expandedUc, setExpandedUc] = useState<string | null>(null)
+  const [collapsedPhases, setCollapsedPhases] = useState<Record<string, boolean>>({})
+  const [showResponses, setShowResponses] = useState(false)
+
+  const maxScore = useMemo(() => {
+    if (allUseCases.length === 0) return 1
+    return Math.max(...allUseCases.map((uc) => uc.score), 1)
+  }, [allUseCases])
+
+  // Group use cases by phase (engagement_category) → sub_category
+  const roadmap = useMemo(() => {
+    return phases.map((phase) => {
+      const phaseUseCases = allUseCases.filter(
+        (uc) => uc.engagement_category === phase.key
+      )
+      // Group by sub_category
+      const groups: Record<string, UseCase[]> = {}
+      for (const uc of phaseUseCases) {
+        const key = uc.sub_category || 'Other'
+        if (!groups[key]) groups[key] = []
+        groups[key].push(uc)
+      }
+      // Sort groups by highest score in group
+      const sortedGroups = Object.entries(groups).sort(
+        ([, a], [, b]) => Math.max(...b.map((u) => u.score)) - Math.max(...a.map((u) => u.score))
+      )
+      return { phase, groups: sortedGroups, total: phaseUseCases.length }
+    }).filter((p) => p.total > 0)
+  }, [allUseCases])
 
   useEffect(() => {
     async function loadResults() {
       try {
-        // Always use client-side scoring for display (returns ALL matching use cases)
         await clientSideProcessing()
 
-        // Fire-and-forget: invoke edge function for email side-effect
+        // Fire-and-forget: invoke edge function for email
         supabase.functions.invoke('process-submission', {
           body: { submission_id: submissionId },
-        }).catch(() => {
-          // Edge function failure is non-critical — email may not send
-        })
+        }).catch(() => {})
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to process results')
       } finally {
@@ -84,7 +135,7 @@ export default function ThankYou() {
       }))
       setCapturedResponses(captured)
 
-      // Score use cases via decision matrix
+      // Score use cases via decision matrix WITH WEIGHTS
       const useCaseScores: Record<string, number> = {}
 
       for (const response of responses) {
@@ -96,23 +147,28 @@ export default function ThankYou() {
         for (const answer of answersToCheck) {
           const { data: matches } = await supabase
             .from('decision_matrix')
-            .select('use_case_id')
+            .select('use_case_id, weight')
             .eq('question_id', response.question_id)
             .eq('triggering_answer', answer)
 
           if (matches) {
             for (const match of matches) {
+              const weight = (match as { use_case_id: string; weight: number }).weight || 1
               useCaseScores[match.use_case_id] =
-                (useCaseScores[match.use_case_id] || 0) + 1
+                (useCaseScores[match.use_case_id] || 0) + weight
             }
           }
         }
       }
 
-      // Get ALL matching use cases sorted by score
-      const sortedIds = Object.entries(useCaseScores)
+      // Filter by minimum score threshold and sort
+      const MIN_SCORE = 3
+      const sortedEntries = Object.entries(useCaseScores)
+        .filter(([, score]) => score >= MIN_SCORE)
         .sort(([, a], [, b]) => b - a)
-        .map(([id]) => id)
+
+      const sortedIds = sortedEntries.map(([id]) => id)
+      const scoreMap = Object.fromEntries(sortedEntries)
 
       if (sortedIds.length === 0) {
         setAllUseCases([])
@@ -125,8 +181,12 @@ export default function ThankYou() {
         .in('id', sortedIds)
 
       if (matchedUseCases) {
-        const ordered = sortedIds
-          .map((id) => matchedUseCases.find((uc) => uc.id === id))
+        const ordered: UseCase[] = sortedIds
+          .map((id) => {
+            const uc = matchedUseCases.find((u) => u.id === id)
+            if (!uc) return undefined
+            return { ...uc, score: scoreMap[id] || 0 }
+          })
           .filter((uc): uc is UseCase => uc !== undefined)
         setAllUseCases(ordered)
       }
@@ -141,7 +201,7 @@ export default function ThankYou() {
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto" />
           <p className="mt-4 text-gray-600 text-lg">Analyzing your responses...</p>
-          <p className="mt-1 text-gray-500 text-sm">Generating personalized recommendations</p>
+          <p className="mt-1 text-gray-500 text-sm">Building your personalized SAP BTP roadmap</p>
         </div>
       </div>
     )
@@ -163,8 +223,9 @@ export default function ThankYou() {
     )
   }
 
-  const topFive = allUseCases.slice(0, 5)
-  const remaining = allUseCases.slice(5)
+  const togglePhase = (key: string) => {
+    setCollapsedPhases((prev) => ({ ...prev, [key]: !prev[key] }))
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
@@ -176,9 +237,9 @@ export default function ThankYou() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
             </svg>
           </div>
-          <h1 className="text-3xl font-bold text-gray-900">Thank You!</h1>
-          <p className="mt-2 text-gray-600">
-            Your responses have been submitted. Here are your personalized SAP BTP recommendations.
+          <h1 className="text-3xl font-bold text-gray-900">Your SAP BTP Roadmap</h1>
+          <p className="mt-2 text-gray-600 max-w-2xl mx-auto">
+            Based on your responses, we've identified {allUseCases.length} recommended use cases organized into a phased implementation roadmap.
           </p>
         </div>
 
@@ -191,188 +252,188 @@ export default function ThankYou() {
           </div>
         ) : (
           <>
-            {/* Top 5 Recommendations — Detailed */}
-            <div className="mb-10">
-              <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
-                <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
-                </svg>
-                Top {Math.min(5, allUseCases.length)} Recommended Use Cases
-              </h2>
-
-              <div className="space-y-6">
-                {topFive.map((uc, index) => (
-                  <div key={uc.id} className="bg-white rounded-2xl shadow-lg overflow-hidden">
-                    {/* Card Header */}
-                    <div className="p-6 border-b border-gray-100">
-                      <div className="flex items-start gap-4">
-                        <div className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm">
-                          {index + 1}
-                        </div>
-                        <div className="flex-1">
-                          <h3 className="text-lg font-semibold text-gray-900">
-                            {uc.use_case_number ? `#${uc.use_case_number} — ` : ''}{uc.title}
-                          </h3>
-                          <div className="flex flex-wrap gap-2 mt-2">
-                            <EngagementBadge category={uc.engagement_category} />
-                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
-                              {uc.category}
-                            </span>
-                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
-                              {uc.sub_category}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Card Body */}
-                    <div className="p-6 space-y-5">
-                      {uc.why_it_matters && (
-                        <div>
-                          <h4 className="text-sm font-semibold text-blue-700 uppercase tracking-wide mb-1">Why It Matters</h4>
-                          <p className="text-gray-700 text-sm leading-relaxed">{uc.why_it_matters}</p>
-                        </div>
-                      )}
-
-                      {uc.whats_included && (
-                        <div>
-                          <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-1">What's Included</h4>
-                          <p className="text-gray-600 text-sm leading-relaxed">{uc.whats_included}</p>
-                        </div>
-                      )}
-
-                      {uc.key_deliverables && (
-                        <div>
-                          <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-1">Key Deliverables</h4>
-                          <p className="text-gray-600 text-sm leading-relaxed">{uc.key_deliverables}</p>
-                        </div>
-                      )}
-
-                      {uc.how_its_delivered && (
-                        <div>
-                          <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-1">How It's Delivered</h4>
-                          <p className="text-gray-600 text-sm leading-relaxed">{uc.how_its_delivered}</p>
-                        </div>
-                      )}
-                    </div>
+            {/* Roadmap Summary Bar */}
+            <div className="bg-white rounded-2xl shadow-lg p-6 mb-8">
+              <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">Roadmap Summary</h2>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                {roadmap.map(({ phase, total }) => (
+                  <div key={phase.key} className={`rounded-xl p-4 ${phase.color.bg} ${phase.color.border} border`}>
+                    <div className={`text-2xl font-bold ${phase.color.text}`}>{total}</div>
+                    <div className={`text-sm font-medium ${phase.color.text}`}>{phase.label}</div>
                   </div>
                 ))}
               </div>
             </div>
 
-            {/* Additional Applicable Use Cases — Laundry List */}
-            {remaining.length > 0 && (
-              <div className="mb-10">
-                <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
-                  <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
-                  </svg>
-                  Additional Applicable Use Cases ({remaining.length})
-                </h2>
+            {/* Phased Roadmap */}
+            {roadmap.map(({ phase, groups, total }) => {
+              const isCollapsed = collapsedPhases[phase.key]
+              return (
+                <div key={phase.key} className="mb-8">
+                  {/* Phase Header */}
+                  <button
+                    onClick={() => togglePhase(phase.key)}
+                    className={`w-full text-left rounded-t-2xl ${phase.color.headerBg} p-5 flex items-center justify-between`}
+                  >
+                    <div>
+                      <h2 className="text-xl font-bold text-white">{phase.label}</h2>
+                      <p className="text-white/80 text-sm mt-1">{phase.description}</p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="bg-white/20 text-white px-3 py-1 rounded-full text-sm font-medium">
+                        {total} use case{total !== 1 ? 's' : ''}
+                      </span>
+                      <svg
+                        className={`w-5 h-5 text-white transition-transform ${isCollapsed ? '' : 'rotate-180'}`}
+                        fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </div>
+                  </button>
 
-                <div className="bg-white rounded-2xl shadow-lg overflow-hidden">
-                  <div className="divide-y divide-gray-100">
-                    {remaining.map((uc) => (
-                      <div key={uc.id}>
-                        <button
-                          onClick={() => setExpandedUc(expandedUc === uc.id ? null : uc.id)}
-                          className="w-full text-left px-6 py-4 hover:bg-gray-50 transition-colors"
-                        >
-                          <div className="flex items-center justify-between">
-                            <div className="flex-1">
-                              <span className="font-medium text-gray-900 text-sm">
-                                {uc.use_case_number ? `#${uc.use_case_number} — ` : ''}{uc.title}
-                              </span>
-                              <div className="flex gap-2 mt-1">
-                                <EngagementBadge category={uc.engagement_category} />
-                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
-                                  {uc.category} / {uc.sub_category}
-                                </span>
-                              </div>
-                            </div>
-                            <svg
-                              className={`w-5 h-5 text-gray-400 transition-transform ${expandedUc === uc.id ? 'rotate-180' : ''}`}
-                              fill="none" stroke="currentColor" viewBox="0 0 24 24"
-                            >
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                            </svg>
+                  {!isCollapsed && (
+                    <div className={`bg-white rounded-b-2xl shadow-lg overflow-hidden border-x border-b ${phase.color.border}`}>
+                      {groups.map(([subCat, useCases], groupIdx) => (
+                        <div key={subCat}>
+                          {/* Sub-category header */}
+                          <div className={`px-6 py-3 ${groupIdx > 0 ? 'border-t' : ''} bg-gray-50`}>
+                            <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide flex items-center gap-2">
+                              <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: phase.key === 'A' ? '#16a34a' : phase.key === 'B' ? '#2563eb' : '#ea580c' }} />
+                              {subCat}
+                              <span className="text-gray-400 font-normal normal-case">({useCases.length})</span>
+                            </h3>
                           </div>
-                        </button>
 
-                        {expandedUc === uc.id && (
-                          <div className="px-6 pb-4 space-y-3 bg-gray-50">
-                            {uc.why_it_matters && (
-                              <div>
-                                <span className="text-xs font-semibold text-blue-700 uppercase">Why It Matters:</span>
-                                <p className="text-gray-700 text-sm mt-0.5">{uc.why_it_matters}</p>
-                              </div>
-                            )}
-                            {uc.whats_included && (
-                              <div>
-                                <span className="text-xs font-semibold text-gray-500 uppercase">What's Included:</span>
-                                <p className="text-gray-600 text-sm mt-0.5">{uc.whats_included}</p>
-                              </div>
-                            )}
-                            {uc.key_deliverables && (
-                              <div>
-                                <span className="text-xs font-semibold text-gray-500 uppercase">Key Deliverables:</span>
-                                <p className="text-gray-600 text-sm mt-0.5">{uc.key_deliverables}</p>
-                              </div>
-                            )}
-                            {uc.how_its_delivered && (
-                              <div>
-                                <span className="text-xs font-semibold text-gray-500 uppercase">How It's Delivered:</span>
-                                <p className="text-gray-600 text-sm mt-0.5">{uc.how_its_delivered}</p>
-                              </div>
-                            )}
+                          {/* Use cases in this sub-category */}
+                          <div className="divide-y divide-gray-100">
+                            {useCases.map((uc, ucIdx) => {
+                              const isTop = ucIdx < 3
+                              const isExpanded = expandedUc === uc.id || isTop
+
+                              return (
+                                <div key={uc.id} className="hover:bg-gray-50/50 transition-colors">
+                                  <button
+                                    onClick={() => {
+                                      if (isTop) return
+                                      setExpandedUc(expandedUc === uc.id ? null : uc.id)
+                                    }}
+                                    className={`w-full text-left px-6 py-4 ${isTop ? 'cursor-default' : 'cursor-pointer'}`}
+                                  >
+                                    <div className="flex items-start justify-between gap-3">
+                                      <div className="flex-1">
+                                        <span className="font-semibold text-gray-900">
+                                          {uc.use_case_number ? `#${uc.use_case_number} — ` : ''}{uc.title}
+                                        </span>
+                                        <div className="flex flex-wrap gap-2 mt-1.5">
+                                          <RelevanceBadge score={uc.score} maxScore={maxScore} />
+                                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                                            {uc.category}
+                                          </span>
+                                        </div>
+                                      </div>
+                                      {!isTop && (
+                                        <svg
+                                          className={`w-5 h-5 text-gray-400 transition-transform flex-shrink-0 mt-1 ${isExpanded ? 'rotate-180' : ''}`}
+                                          fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                                        >
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                        </svg>
+                                      )}
+                                    </div>
+                                  </button>
+
+                                  {isExpanded && (uc.why_it_matters || uc.whats_included || uc.key_deliverables || uc.how_its_delivered) && (
+                                    <div className="px-6 pb-5 space-y-3">
+                                      {uc.why_it_matters && (
+                                        <div>
+                                          <h4 className="text-xs font-semibold text-blue-700 uppercase tracking-wide mb-0.5">Why It Matters</h4>
+                                          <p className="text-gray-700 text-sm leading-relaxed">{uc.why_it_matters}</p>
+                                        </div>
+                                      )}
+                                      {uc.whats_included && (
+                                        <div>
+                                          <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-0.5">What's Included</h4>
+                                          <p className="text-gray-600 text-sm leading-relaxed">{uc.whats_included}</p>
+                                        </div>
+                                      )}
+                                      {uc.key_deliverables && (
+                                        <div>
+                                          <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-0.5">Key Deliverables</h4>
+                                          <p className="text-gray-600 text-sm leading-relaxed">{uc.key_deliverables}</p>
+                                        </div>
+                                      )}
+                                      {uc.how_its_delivered && (
+                                        <div>
+                                          <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-0.5">How It's Delivered</h4>
+                                          <p className="text-gray-600 text-sm leading-relaxed">{uc.how_its_delivered}</p>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              )
+                            })}
                           </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              </div>
-            )}
+              )
+            })}
           </>
         )}
 
-        {/* Captured Responses Summary */}
+        {/* Captured Responses — Collapsible */}
         {capturedResponses.length > 0 && (
           <div className="mb-10">
-            <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
-              <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            <button
+              onClick={() => setShowResponses(!showResponses)}
+              className="w-full text-left flex items-center justify-between bg-white rounded-2xl shadow-lg p-5 hover:bg-gray-50 transition-colors"
+            >
+              <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                Your Responses ({capturedResponses.length})
+              </h2>
+              <svg
+                className={`w-5 h-5 text-gray-400 transition-transform ${showResponses ? 'rotate-180' : ''}`}
+                fill="none" stroke="currentColor" viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
               </svg>
-              Your Responses
-            </h2>
-            <div className="bg-white rounded-2xl shadow-lg overflow-hidden">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-50 border-b">
-                  <tr>
-                    <th className="text-left px-6 py-3 font-medium text-gray-600">Question</th>
-                    <th className="text-left px-6 py-3 font-medium text-gray-600">Answer</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {capturedResponses.map((cr, idx) => (
-                    <tr key={idx} className="hover:bg-gray-50">
-                      <td className="px-6 py-3 text-gray-700">{cr.questionText}</td>
-                      <td className="px-6 py-3 text-gray-900 font-medium">
-                        {Array.isArray(cr.answer) ? cr.answer.join(', ') : cr.answer}
-                      </td>
+            </button>
+            {showResponses && (
+              <div className="bg-white rounded-b-2xl shadow-lg overflow-hidden -mt-4 pt-2">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 border-b">
+                    <tr>
+                      <th className="text-left px-6 py-3 font-medium text-gray-600">Question</th>
+                      <th className="text-left px-6 py-3 font-medium text-gray-600">Answer</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {capturedResponses.map((cr, idx) => (
+                      <tr key={idx} className="hover:bg-gray-50">
+                        <td className="px-6 py-3 text-gray-700">{cr.questionText}</td>
+                        <td className="px-6 py-3 text-gray-900 font-medium">
+                          {Array.isArray(cr.answer) ? cr.answer.join(', ') : cr.answer}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
 
         {/* Footer */}
         <div className="mt-8 bg-blue-50 border border-blue-200 rounded-xl p-4 text-center">
           <p className="text-blue-800 text-sm">
-            A copy of these recommendations along with your responses has been sent to our team. We will be in touch shortly.
+            A copy of this roadmap along with your responses has been sent to our team. We will be in touch shortly to discuss next steps.
           </p>
         </div>
 

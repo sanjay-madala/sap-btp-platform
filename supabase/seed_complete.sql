@@ -3317,3 +3317,32 @@ BEGIN
   VALUES (v_q10_1, v_uc150, 'Process Automation — Scaling RPA and intelligent automation with SAP Build Process Automation');
 
 END $$;
+
+-- =============================================
+-- SET DECISION MATRIX WEIGHTS (after data insert)
+-- =============================================
+-- Section 3.x.1 (Core Business Challenge Details — MultipleChoice follow-ups) → weight 5
+UPDATE decision_matrix dm SET weight = 5
+FROM questions q, sections s
+WHERE dm.question_id = q.id AND q.section_id = s.id
+AND s.title = 'Core Business Challenges' AND q.question_type = 'MultipleChoice';
+
+-- Section 9 (Industry-Specific Questions — YesNo) → weight 4
+UPDATE decision_matrix dm SET weight = 4
+FROM questions q, sections s
+WHERE dm.question_id = q.id AND q.section_id = s.id
+AND s.title = 'Industry-Specific Questions';
+
+-- Section 3 (Core Business Challenges — YesNo parent questions) → weight 3
+UPDATE decision_matrix dm SET weight = 3
+FROM questions q, sections s
+WHERE dm.question_id = q.id AND q.section_id = s.id
+AND s.title = 'Core Business Challenges' AND q.question_type = 'YesNo';
+
+-- Sections 4-8 (Functional area checkboxes) keep default weight of 2
+
+-- Section 10 (Strategic Technology Roadmap) → weight 1
+UPDATE decision_matrix dm SET weight = 1
+FROM questions q, sections s
+WHERE dm.question_id = q.id AND q.section_id = s.id
+AND s.title = 'Strategic Technology Roadmap';
