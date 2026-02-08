@@ -40,7 +40,7 @@ function EngagementBadge({ category }: { category: string | null }) {
 export default function ThankYou() {
   const { submissionId } = useParams<{ submissionId: string }>()
   const [allUseCases, setAllUseCases] = useState<UseCase[]>([])
-  const [capturedResponses, setCapturedResponses] = useState<CapturedResponse[]>([])
+  const [, setCapturedResponses] = useState<CapturedResponse[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [expandedUc, setExpandedUc] = useState<string | null>(null)
